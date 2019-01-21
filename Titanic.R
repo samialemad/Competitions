@@ -1,0 +1,572 @@
+# importing the libraries
+library(tibble)
+library(ggplot2)
+library(stringr)
+library(stringi)
+library(plyr)
+library(dplyr)
+library(zoo)
+library(tidyverse)
+library(lubridate)
+library(quanteda)
+library(psych)
+library(caret)
+library(MASS)
+library(class)
+library(tree)
+library(gbm)
+
+# Import the data set and understand.
+Train_data = read.csv('train.csv', header = TRUE, stringsAsFactors = FALSE)
+Test_data = read.csv('test.csv', header = TRUE, stringsAsFactors = FALSE)
+Test_data$Survived = NA
+
+Titanic_data = rbind(Train_data, Test_data)
+View(Titanic_data)
+str(Titanic_data)
+summary(Titanic_data)
+glimpse(Titanic_data)
+
+#Setup Missing Data
+set_missing <- function(x) {
+  # Replace 'No Info' with NA
+  x[x == 'No Info'] <- NA
+  # Replace empty string with NA
+  x[x == ''] <- NA
+  return(x)
+}
+
+Titanic_data <- map_df(Titanic_data, set_missing)
+
+
+#Remove polluted predictors
+Titanic_data <- Titanic_data[colSums(is.na(Titanic_data))/nrow(Titanic_data)<0.4]
+dim(Titanic_data)
+
+############################################## EDA ##########################################
+# analyzing the Name feature.
+
+## extracthig the passengers' title
+Titanic_data$title = str_sub(Titanic_data$Name, 
+                             as.numeric(str_locate(Titanic_data$Name, ',')[,1])+2,
+                             as.numeric(str_locate(Titanic_data$Name, '\\.')[,1])-1
+)
+
+Titanic_data$sirname = str_sub(Titanic_data$Name, 
+                               1,
+                               as.numeric(str_locate(Titanic_data$Name, ',')[,1])-1
+)
+Titanic_data$sirname = as.factor(Titanic_data$sirname)
+
+## transferring the title into factor
+Titanic_data$title = as.factor(Titanic_data$title)
+title_sir = c('Capt', 'Col', 'Don', 'Dr', 'Jonkheer', 'Lady','Major', 
+              'Mlle', 'Mme',  'the Countess', 'Rev',  'Dona')
+Titanic_data = Titanic_data[, c(1:3, 12:13, 4:11)]
+write.csv(Titanic_data, "All_data.csv")
+## changing varables to factor type
+Titanic_data$Survived = as.factor(Titanic_data$Survived)
+Titanic_data$Pclass   = as.factor(Titanic_data$Pclass)
+
+attach(Titanic_data)
+
+## solving uniqiw identifiers
+Titanic_data$title[title %in% title_sir]<- 'Sir'
+Titanic_data$title[title=="Ms"]<- 'Miss'
+Titanic_data$title[Sex=='male' & title %in% title_sir]<- 'Sir'
+Titanic_data$title[Sex=='female' & title %in% title_sir]<- 'Sir'
+Titanic_data$title[Sex=='female' & title %in% title_sir] = 
+  ifelse(str_detect(Titanic_data$Name[Sex=='female' & title %in% title_sir], "Mrs"), "Mrs", "Miss")
+Titanic_data$title = factor(Titanic_data$title)
+
+help(options)
+
+#Checking Outliers
+Count_Outliers <- 0
+is_outlier <- function(x) {
+  return(x < quantile(x, 0.25, na.rm= TRUE) - 1.5 * IQR(x, na.rm= TRUE) | x > quantile(x, 0.75, na.rm= TRUE) + 1.5 * IQR(x, na.rm= TRUE))
+} 
+
+
+#Cheking Pclass variable
+summary(Titanic_data$Pclass)
+
+##list of the values, and their count
+count(Titanic_data, Pclass)
+
+##percentage of NA value in Pclass
+NA_percnt =as.numeric(sum(is.na(Titanic_data$Pclass))/nrow(Titanic_data)*100)
+NA_percnt
+
+## Visulazing
+ggplot(Titanic_data, aes(x=Pclass, fill=Survived)) + 
+  geom_bar( position = "dodge")   +
+  labs(title = "Passenger Class\n", x = "Passenger Class", y = "Count", fill= "Success|Failed\n ") +
+  scale_fill_manual(labels = c(0,1), values = c("red", "green")) +
+  theme_bw() +
+  theme(axis.text.x=element_text(size=14, angle=360), axis.title.x=element_text(size=16),
+        axis.text.y=element_text(size=14), axis.title.y=element_text(size=16),
+        plot.title=element_text(size=20, face="bold", color="blue"))
+
+table(Pclass, Survived)
+
+##figuiring out the outlier and labeld them
+Titanic_data %>%  
+  mutate(outlier = ifelse(is_outlier(Pclass), Pclass, as.numeric(NA))) %>%
+  ggplot(., aes(x = 1,y = Pclass)) +
+  geom_boxplot(outlier.color = "red") +
+  geom_text(aes(label = outlier), na.rm = TRUE, hjust = -0.3, color="red")
+
+#Checking Sex Variable
+summary(Titanic_data$Sex)
+
+##list of the values, and their count
+count(Titanic_data, Sex)
+
+##percentage of NA value in Pclass
+NA_percnt =as.numeric(sum(is.na(Titanic_data$Sex))/nrow(Titanic_data)*100)
+NA_percnt
+
+## Visulazing Sex variable
+ggplot(Titanic_data, aes(x=Sex, fill=Survived)) + 
+  geom_bar(position = "dodge")   +
+  labs(title = "Passengers \n", x = "Passenger", y = "Count", fill= "Success|Failed\n ") +
+  scale_fill_manual(labels = c(0,1), values = c("red", "green")) +
+  theme_bw() +
+  theme(axis.text.x=element_text(size=14, angle=360), axis.title.x=element_text(size=16),
+        axis.text.y=element_text(size=14), axis.title.y=element_text(size=16),
+        plot.title=element_text(size=20, face="bold", color="blue"))
+
+table(Sex, Survived)
+
+#Checking Age Variable
+summary(Titanic_data$Age)
+
+##list of the values, and their count
+count(Titanic_data, Age)
+
+##percentage of NA value in Age
+NA_percnt =as.numeric(sum(is.na(Titanic_data$Age))/nrow(Titanic_data)*100)
+NA_percnt
+
+## Visulaizing the Age variable
+ggplot(Titanic_data, aes(x=Age, fill=Survived)) + 
+  geom_density(alpha=0.2) +
+  labs(title = "Passengers' Ages\n", x = "Age", y = "Survived", fill= "Dead|Survived\n ") +
+  scale_fill_manual(labels = c("Dead", "Survived"), values = c("red", "green")) +
+  theme_bw() +
+  theme(axis.text.x=element_text(size=14), axis.title.x=element_text(size=16),
+        axis.text.y=element_text(size=14), axis.title.y=element_text(size=16),
+        plot.title=element_text(size=20, face="bold", color="darkgreen"))
+
+
+## figuiring out the outlier and labeld them
+Titanic_data %>%  
+  mutate(outlier = ifelse(is_outlier(Age), Age, as.numeric(NA))) %>%
+  ggplot(., aes(x = 1,y = Age)) +
+  geom_boxplot(outlier.color = "red") +
+  geom_text(aes(label = outlier), na.rm = TRUE, hjust = -0.3, color="red")
+
+##counting outlier and finding their percentage
+outlier = ifelse(is_outlier(Age), Age, as.numeric(NA))
+outlier_count <- sum(!is.na(outlier))
+outlier_percent <- (outlier_count/nrow(Titanic_data))*100
+
+## repacing the outliers values 
+Titanic_data$Age[Age>65]=63
+Titanic_data$Age[Age<=0.42]=0.67
+
+## solving NA values
+Titanic_data$Age[title=="Sir"] = ifelse(is.na(Titanic_data$Age[title=="Sir"]), 
+                                       mean(Titanic_data$Age[title=="Sir"], na.rm = TRUE),   
+                                       Titanic_data$Age[title=="Sir"])
+Titanic_data$Age[title=="Master"] = ifelse(is.na(Titanic_data$Age[title=="Master"]), 
+                                           mean(Titanic_data$Age[title=="Master"], na.rm = TRUE),   
+                                           Titanic_data$Age[title=="Master"])
+Titanic_data$Age[title=="Miss"] = ifelse(is.na(Titanic_data$Age[title=="Miss"]), 
+                                         mean(Titanic_data$Age[title=="Miss"], na.rm = TRUE),   
+                                         Titanic_data$Age[title=="Miss"])
+Titanic_data$Age[title=="Ms"] = ifelse(is.na(Titanic_data$Age[title=="Ms"]), 
+                                       mean(Titanic_data$Age[title=="Ms"], na.rm = TRUE),   
+                                       Titanic_data$Age[title=="Ms"])
+
+Titanic_data$Age[title=="Mr"] = ifelse(is.na(Titanic_data$Age[title=="Mr"]), 
+                                       mean(Titanic_data$Age[title=="Mr"], na.rm = TRUE),   
+                                       Titanic_data$Age[title=="Mr"])
+Titanic_data$Age[title=="Mrs"] = ifelse(is.na(Titanic_data$Age[title=="Mrs"]), 
+                                        mean(Titanic_data$Age[title=="Mrs"], na.rm = TRUE),   
+                                        Titanic_data$Age[title=="Mrs"])
+#Titanic_data$Age[is.na(Titanic_data$Age)] = 45
+Titanic_data$Age= round(Titanic_data$Age, 2)
+##Initializating a new Categorical variable
+Titanic_data$Age_Group = ifelse(Age>0 & Age<=2.0, 1, 
+                                ifelse(Age>=2.01 & Age<=12.00, 2,
+                                       ifelse(Age>12.01 & Age<=21.00, 3,
+                                              ifelse(Age>21.01 & Age<=45.00, 4,
+                                                     5))))
+
+Titanic_data$Age_Group[Titanic_data$Age>0 & Titanic_data$Age<=2] = 1
+Titanic_data$Age_Group[Titanic_data$Age>2 & Titanic_data$Age<=12] = 2
+Titanic_data$Age_Group[Titanic_data$Age>12 & Titanic_data$Age<=21] = 3
+Titanic_data$Age_Group[Titanic_data$Age>21 & Titanic_data$Age<=45] = 4
+Titanic_data$Age_Group[Titanic_data$Age>45] = 5
+
+Titanic_data$Age_Group = as.factor(Titanic_data$Age_Group)
+View(Titanic_data)
+
+#Cheking SibSp variable
+summary(Titanic_data$SibSp)
+
+##list of the values, and their count
+count(Titanic_data, SibSp)
+
+##percentage of NA value in Pclass
+NA_percnt =as.numeric(sum(is.na(Titanic_data$SibSp))/nrow(Titanic_data)*100)
+NA_percnt
+
+## Visulazing
+ggplot(Titanic_data, aes(x=as.factor(SibSp), fill=Survived)) + 
+  geom_bar( position = "dodge")   +
+  labs(title = "Passenger relatives Siblins and Sponsour\n", x = "Passenger Class", y = "Count", fill= "Success|Failed\n ") +
+  scale_fill_manual(labels = c(0,1), values = c("red", "green")) +
+  theme_bw() +
+  theme(axis.text.x=element_text(size=14, angle=360), axis.title.x=element_text(size=16),
+        axis.text.y=element_text(size=14), axis.title.y=element_text(size=16),
+        plot.title=element_text(size=20, face="bold", color="blue"))
+
+table(Pclass, Survived)
+
+##figuiring out the outlier and labeld them
+Titanic_data %>%  
+  mutate(outlier = ifelse(is_outlier(SibSp), SibSp, as.numeric(NA))) %>%
+  ggplot(., aes(x = 1,y = SibSp)) +
+  geom_boxplot(outlier.color = "red") +
+  geom_text(aes(label = outlier), na.rm = TRUE, hjust = -0.3, color="red")
+
+##counting outlier and finding their percentage
+outlier = ifelse(is_outlier(SibSp), SibSp, as.numeric(NA))
+outlier_count <- sum(!is.na(outlier))
+outlier_percent <- (outlier_count/nrow(Titanic_data))*100
+#Titanic_data$SibSp = as.factor(Titanic_data$SibSp)
+#Titanic_data$Parch = as.factor(Titanic_data$Parch)
+
+## solving the Sibsp outlier's values
+Titanic_data$SibSp[SibSp >1] = 1
+
+#Cheking Parch variable
+summary(Titanic_data$Parch)
+
+##list of the values, and their count
+count(Titanic_data, Parch)
+
+##percentage of NA value in Pclass
+NA_percnt =as.numeric(sum(is.na(Titanic_data$Parch))/nrow(Titanic_data)*100)
+NA_percnt
+
+## Visulazing
+ggplot(Titanic_data, aes(x=as.factor(Parch), fill=Survived)) + 
+  geom_bar( position = "dodge")   +
+  labs(title = "Passenger relatives Parnets  \n and Childerns", x = "Passenger Class", y = "Count", fill= "Success|Failed\n ") +
+  scale_fill_manual(labels = c(0,1), values = c("red", "green")) +
+  theme_bw() +
+  theme(axis.text.x=element_text(size=14, angle=360), axis.title.x=element_text(size=16),
+        axis.text.y=element_text(size=14), axis.title.y=element_text(size=16),
+        plot.title=element_text(size=20, face="bold", color="blue"))
+
+table(Parch, Survived)
+
+##figuiring out the outlier and labeld them
+Titanic_data %>%  
+  mutate(outlier = ifelse(is_outlier(Parch), Parch, as.numeric(NA))) %>%
+  ggplot(., aes(x = 1,y = Parch)) +
+  geom_boxplot(outlier.color = "red") +
+  geom_text(aes(label = outlier), na.rm = TRUE, hjust = -0.3, color="red")
+
+##counting outlier and finding their percentage
+outlier = ifelse(is_outlier(Parch), Parch, as.numeric(NA))
+outlier_count <- sum(!is.na(outlier))
+outlier_percent <- (outlier_count/nrow(Titanic_data))*100
+
+## solving the Sibsp outlier's values
+Titanic_data$Parch[Titanic_data$Parch>2] = 2
+
+# Initilizing new feature
+Titanic_data$relatives = Titanic_data$SibSp + Titanic_data$Parch
+Titanic_data$relatives = as.factor(Titanic_data$relatives)
+count(Titanic_data, relatives)
+Titanic_data$Sex = as.factor(Titanic_data$Sex)
+
+# Analyzing the  Ticket variable
+library(help=stringr)
+Titanic_data$Ticket = as.character(Titanic_data$Ticket)
+Titanic_data$Ticket_Category = ifelse(str_detect(Ticket, " "), 
+                                      str_sub(Titanic_data$Ticket, 1, as.numeric(str_locate(Titanic_data$Ticket, " ")[,1])-1),
+                                      "N")
+Titanic_data$Ticket_Category = as.factor(Titanic_data$Ticket_Category)
+Titanic_data$Normal_Ticket = ifelse(Titanic_data$Ticket_Category=="N", 1, 0)
+Titanic_data$Normal_Ticket = as.factor(Titanic_data$Normal_Ticket)
+
+Titanic_data$Normal_Ticket = as.factor(Titanic_data$Normal_Ticket)
+
+# Analyzing the Embarked variable
+#Cheking Parch variable
+summary(Titanic_data$Embarked)
+
+##list of the values, and their count
+count(Titanic_data, Embarked)
+
+##percentage of NA value in Pclass
+NA_percnt =as.numeric(sum(is.na(Titanic_data$Embarked))/nrow(Titanic_data)*100)
+NA_percnt
+Titanic_data$Embarked = ifelse(is.na(Embarked), "S", Titanic_data$Embarked)
+Titanic_data$Embarked = as.factor(Titanic_data$Embarked)
+count(Titanic_data, Embarked)
+E1 <- Titanic_data$Embarked
+Titanic_data$Embarked <- as.factor(Titanic_data$Embarked)
+#Titanic_data$Embarked[is.na(Titanic_data$Embarked)]='S'
+#Cheking Fare variable
+Titanic_data$Fare[Pclass==3] = ifelse(is.na(Titanic_data$Fare[Pclass==3]), 
+                                      13.3,   
+                                      Titanic_data$Fare[Pclass==3])
+
+# Analyzing the Sirname variable
+Titanic_data$famiilymembers = count(Titanic_data, sirname)[,2]
+################## Saving the new data set ##################
+Titanic_data$Sex = as.factor(Titanic_data$Sex)
+Titanic_data$SibSp = as.integer(Titanic_data$SibSp)
+Titanic_data$Parch = as.integer(Titanic_data$Parch)
+
+ 
+write.csv(Titanic_data, "ALL_DATA.csv", row.names = FALSE)
+###### New features; has_mother & has_baby
+Titanic_data$has_mother <- ifelse(Titanic_data$Age>13, 1, 0)
+Titanic_data$has_baby <- ifelse((Titanic_data$Parch>1 & Titanic_data$title %in% c("Mr, Mrs")),
+                                1, 0)
+Titanic_data$has_mother<-  as.factor(Titanic_data$has_mother)
+Titanic_data$has_baby <- as.factor(Titanic_data$has_baby)
+#################### Train and Test set ###########################
+Titanic_data$is_alone <- ifelse((SibSp+Parch>0), 1,0)
+Titanic_data$is_alone = as.factor(Titanic_data$is_alone)
+Titanic_data_scaled = scale(Titanic_data[])
+Train_data = Titanic_data[1:891, ]
+Test_data = Titanic_data[892:1309, ]
+####################### Bulid Random Forest model ##############################
+#library(randomForest)
+set.seed(2558)
+control <- rfeControl(functions = rfFuncs,
+                      method = "repeatedcv",
+                      repeats = 3,
+                      verbose = FALSE)
+grid <- expand.grid(mtry=5)
+
+Model_RF<-train(Survived~ Pclass+Fare+Embarked+title+Sex+Age+SibSp+Parch+Age_Group+
+                  Normal_Ticket+has_mother,
+                data=Train_data, method='rf',trControl=fitControl,tuneGrid=grid)
+varImp(object=Model_RF)
+
+Survived__T<-predict.train(object=Model_RF,Test_data[,c(3:6, 9:12, 14,16)],type="raw")
+
+#model_RF = randomForest(Survived~SibSp+Embarked+Pclass+title+Age_Group+Fare,
+                        data=Train_data, mtry=3, importance =TRUE, 
+                        ntree= 450 )
+
+#print(Model_RF)
+#Survived__T= predict(model_RF, newdata = Test_data)
+
+
+View(Test_data[,1:2])
+PassengerId <- Test_data$PassengerId
+output.df <- as.data.frame(PassengerId)
+output.df$Survived <- Survived__T
+write.csv(output.df, "kaggle_submission.csv", row.names = FALSE)
+View(output.df)
+View(Test_data)
+table(model_RF_predict, Survived)
+plot(model_RF)
+
+importance(model_RF)
+varImpPlot(model_RF)
+
+
+####################### Bulid Boosting model #######################################
+set.seed(2558)
+control <- rfeControl(functions = rfFuncs,
+                      method = "repeatedcv",
+                      repeats = 3,
+                      verbose = FALSE)
+grid <- expand.grid(n.trees=c(10,20,50,100,500,1000),shrinkage=c(0.01,0.05,0.1,0.5),
+                    n.minobsinnode = c(3,5,10),interaction.depth=c(1,5,10))
+
+
+
+
+Model_GBM <- train(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked + title + Age_Group +  Normal_Ticket,
+                   data = Train_data, method = "gbm", tuneGrid=grid,tuneLength=6,
+                   trControl = control,verbose = FALSE)
+
+
+
+summary(Model_GBM)
+## Prediction
+#Predictions
+predictions<-predict.train(Model_GBM, Train_data,type="raw")
+confusionMatrix(predictions,Train_data$Survived)
+ 
+
+####################### Bulid LR with Caret ######################
+set.seed(123)
+ 
+grid<- expand.grid(C=c(0.001, 0.01, 0.1, 1,10,100, 1000))
+
+model_glm <-train(Survived~ Pclass+Fare+Embarked+title+Sex+Age+SibSp+Parch+Age_Group+Normal_Ticket,
+                  data= Train_data, method='glm', 
+                  trControl=control, preProcess = c("center", "scale"))
+
+Nor
+
+
+
+
+######################## Build the model with Logistic regression ###########
+model_LR = glm(Survived~Pclass+Sex+Age+SibSp+Parch+Fare+Embarked+title+Age_Group+Normal_Ticket+has_mother,
+               data=Train_data, family = "binomial")
+model_LR_step <- stepAIC(model_LR)
+summary(model_LR_step)
+
+Survived_T= predict(model_LR_step, Test_data, type ="response")
+PassengerId <- Test_data$PassengerId
+glm.pred=rep (0, nrow(Test_data))
+glm.pred[Survived_T >=.5]=1
+output.df <- as.data.frame(PassengerId)
+output.df$Survived <- glm.pred
+write.csv(output.df, "kaggle_submission.csv", row.names = FALSE)
+
+
+
+table(glm.pred, Train_data$Survived)
+
+############# LDA model (THE BEST MODEL) #################
+fitControl <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
+#grid  <- expand.grid(k=c(2,3,4))
+#Titanic_data$Parch = as.factor(Titanic_data$Parch)
+#Titanic_data$Sex = as.factor(Titanic_data$Sex)
+set.seed(123)
+Model_LR_caret <- train(Survived ~ Pclass+Sex+Age+Parch+Embarked+Fare+Normal_Ticket+has_mother,
+                        data = Train_data, method = "qda", 
+                        preProcess = c("center", "scale"), tuneLength = 10,
+                        trControl = fitControl, verbose = FALSE)
+
+Model_KNN <- train(Survived ~ Pclass+Sex+Age+SibSp+Parch+Fare+Embarked+title+Age_Group,
+                   data = Train_data, method = "qda",trControl=fitControl, 
+                   preProcess = c("center", "scale"),tuneLength = 10)
+
+
+model_LDA = qda(Survived ~ Pclass+Sex+Age+SibSp+Parch+Fare+Embarked+title+Age_Group,
+                data=Train_data)
+
+model_LDA.pred=predict(model_LDA, Test_data)$class  
+PassengerId <- Test_data$PassengerId
+output.df <- as.data.frame(PassengerId)
+output.df$Survived <- model_LDA.pred
+write.csv(output.df, "kaggle_submission.csv", row.names = FALSE)### KNN Model ##############
+################### KNN Model ########################
+fitControl <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
+grid <- expand.grid(k=c(1:40))
+set.seed(2232)
+Model_KNN <- train(Survived ~  Pclass+Fare+Embarked+title+Sex+Age+SibSp+Parch+Normal_Ticket,
+                   data = Train_data, method = "knn",trControl=fitControl, 
+                   preProcess = c("center", "scale"),tuneLength = 10)
+varImp(object=Model_KNN)
+model_KNN.pred=predict(Model_KNN, Test_data) 
+PassengerId <- Test_data$PassengerId
+output.df <- as.data.frame(PassengerId)
+output.df$Survived <- model_KNN.pred
+write.csv(output.df, "kaggle_submission.csv", row.names = FALSE)### KNN Model ##############
+
+#################### TREE Model ###################
+fitControl <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
+set.seed(1234)
+#grid <- expand.grid(parameter=c(6,7,8,9))
+set.seed(2232)
+Model_Tree_Caret <- train(Survived ~ Pclass+Fare+Embarked+title+Sex+Age+SibSp+Parch+Age_Group+Normal_Ticket,
+                   data = Train_data, method = "xgbTree",trControl=fitControl)
+Survived__T= predict(Model_Tree_Caret, Test_data, type ="raw")
+PassengerId <- Test_data$PassengerId
+output.df <- as.data.frame(PassengerId)
+output.df$Survived <- Survived__T
+write.csv(output.df, "kaggle_submission.csv", row.names = FALSE)
+###
+
+
+
+
+Model_tree= tree(Survived~ Pclass+Sex+Age+SibSp+Parch+Fare+Embarked+title+Age_Group,
+                 data=Train_data)
+
+summary(Model_tree)
+
+Model_tree.pred=predict(Model_tree, Train_data, type ="class")
+table(Model_tree.pred, Train_data$Survived)
+
+## CV of the tree model
+Model_tree.CV =cv.tree(Model_tree ,FUN=prune.misclass )
+par(mfrow =c(1,2))
+
+plot(Model_tree.CV$size ,Model_tree.CV$dev ,type="b")
+plot(Model_tree.CV$k ,Model_tree.CV$dev ,type="b")
+
+## build a new trr model with the best size of K
+Model_tree_pruned =prune.misclass(Model_tree, best =4)
+plot(Model_tree_pruned)
+text(Model_tree_pruned, pretty =0)
+
+## new predictions for the pruned tree
+Model_tree_pruned.pred=predict(Model_tree_pruned, Test_data, type ="class")
+
+Survived__T= predict(Model_tree_pruned, Test_data, type ="class")
+PassengerId <- Test_data$PassengerId
+output.df <- as.data.frame(PassengerId)
+output.df$Survived <- Survived__T
+write.csv(output.df, "kaggle_submission.csv", row.names = FALSE)
+
+
+##### SVM MOdel #################################################
+library(e1071)
+library(fastAdaboost)
+fitControl <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
+
+grid <- expand.grid(treesize = 10,
+                    ntrees = c(100, 200, 300, 400, 450, 500))
+
+Model_LR <- train(Survived ~ Sex+SibSp+Parch+Fare+Embarked+title+Age_Group,
+                  data = Train_data, method = "logreg",
+                  #preProcess = c("center", "scale"),
+                  trControl = fitControl,tuneLength = 10, tuneGrid= grid,
+                  verbose = FALSE)
+varImp(Model_Svm)
+
+
+## predict
+Survived__T<-predict.train(object=Model_Svm,Test_data,type="raw")
+PassengerId <- Test_data$PassengerId
+output.df <- as.data.frame(PassengerId)
+output.df$Survived <- Survived__T
+write.csv(output.df, "kaggle_submission.csv", row.names = FALSE)
+
+
+
+summary(Model_Svm)
+
+## Tunning SVM model
+Model_Svm.tune=tune(svm , Survived~ SibSp+Pclass+Sex+Age_Group+Fare,
+                    data= Train_data, kernel="radial", 
+                    ranges =list(cost=c(0.001, 0.01, 0.1, 1 ,10 ,100 ,1000), 
+                                 gamma=c(0.5,1,2,3,4)))
+summary(Model_Svm.tune)
+###############################################################################
+Arranged_data <- Titanic_data %>% dplyr::select(sirname,Name,SibSp,Parch,Ticket,Fare) %>%
+                                          filter(SibSp+Parch>0) %>% 
+                                          group_by(Ticket,sirname) %>%
+                                          arrange(Ticket, SibSp)
+View(Arranged_data)
+write.csv(Arranged_data, "Arranged_data.csv", row.names = FALSE)
